@@ -1,0 +1,37 @@
+{
+  "name": "safetynet-dao",
+  "version": "1.0.0",
+  "description": "SafetyNet DAO - Decentralized Mutual Aid Platform",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "type-check": "turbo run type-check",
+    "db:generate": "cd packages/db && prisma generate",
+    "db:push": "cd packages/db && prisma db push",
+    "db:migrate": "cd packages/db && prisma migrate dev",
+    "db:seed": "cd packages/db && tsx src/seed.ts",
+    "test": "turbo run test",
+    "test:e2e": "cd apps/web && playwright test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.0",
+    "turbo": "^1.10.16",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "npm@10.0.0",
+  "dependencies": {
+    "@stripe/stripe-js": "^8.3.0",
+    "stripe": "^19.3.0"
+  }
+}

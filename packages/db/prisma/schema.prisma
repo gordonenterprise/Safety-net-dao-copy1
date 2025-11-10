@@ -1,0 +1,826 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  emailVerified     DateTime?
+  password          String?  // For email/password auth
+  name              String?
+  image             String?
+  walletAddress     String?  @unique
+  role              UserRole @default(MEMBER)
+  
+  // Membership details
+  membershipStatus  MembershipStatus @default(PENDING)
+  membershipNftTokenId String?       // ERC-1155 token ID
+  membershipExpiresAt  DateTime?     // Grace period tracking
+  joinedAt          DateTime @default(now())
+  lastActiveAt      DateTime @default(now())
+  
+  // Security & 2FA settings
+  totpSecret        String?
+  backupCodes       String[]
+  twoFactorEnabled  Boolean @default(false)
+  emailVerifiedAt   DateTime?
+  
+  // Profile information
+  bio               String?
+  location          String?
+  occupation        String?
+  emergencyContact  String?
+  
+  // Risk & anti-fraud
+  riskScore         Float?           // Computed risk score
+  deviceFingerprint String?          // Browser fingerprint
+  lastIpAddress     String?          // Last known IP
+  
+  // Relations
+  accounts          Account[]
+  sessions          Session[]
+  subscriptions     Subscription[]
+  claims            Claim[]
+  votes             Vote[]
+  payouts           Payout[]
+  auditLogs         AuditLog[]
+  
+  // Governance relations
+  proposalsCreated  Proposal[] @relation("ProposedBy")
+  proposalsExecuted Proposal[] @relation("ExecutedBy")
+  proposalVotes     ProposalVote[] @relation("VoteCast")
+  delegateVotes     ProposalVote[] @relation("DelegateVote")
+  actingAs          DelegateVote[] @relation("ActingDelegate")
+  delegating        DelegateVote[] @relation("Delegating")
+  delegatedTo       Delegation[] @relation("DelegatedTo")
+  receivedDelegation Delegation[] @relation("ReceivedDelegation")
+  governanceToken   GovernanceToken?
+  
+  // NFT relations
+  membershipNFTs    MembershipNFT[] @relation("NFTOwner")
+  verifiedNFTs      MembershipNFT[] @relation("NFTVerifier")
+  revokedNFTs       MembershipNFT[] @relation("NFTRevoker")
+  nftMintRequests   NFTMintRequest[] @relation("NFTMintRequests")
+  reviewedMintRequests NFTMintRequest[] @relation("NFTMintReviewer")
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Subscription & Payment Management
+model Subscription {
+  id                String             @id @default(cuid())
+  userId            String
+  stripeCustomerId  String?
+  stripeSubscriptionId String?
+  
+  status            SubscriptionStatus @default(PENDING)
+  plan              SubscriptionPlan   @default(BASIC)
+  amount            Int                // in cents
+  currency          String             @default("usd")
+  
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean           @default(false)
+  canceledAt         DateTime?
+  
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments          Payment[]
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  @@map("subscriptions")
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  subscriptionId    String
+  stripePaymentIntentId String?
+  
+  amount            Int           // in cents
+  currency          String        @default("usd")
+  status            PaymentStatus @default(PENDING)
+  
+  paidAt            DateTime?
+  failedAt          DateTime?
+  refundedAt        DateTime?
+  
+  metadata          Json?
+  
+  subscription      Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  @@map("payments")
+}
+
+// Claims Management
+model Claim {
+  id                String      @id @default(cuid())
+  userId            String
+  
+  title             String
+  description       String @db.Text
+  category          ClaimCategory
+  requestedAmount   Int         // in cents
+  
+  status            ClaimStatus @default(DRAFT)
+  priority          ClaimPriority @default(NORMAL)
+  
+  // Risk & anti-fraud
+  riskScore         Float?      // Computed risk score (0-1)
+  riskFactors       Json?       // Risk calculation details
+  duplicateCheckCid String?     // IPFS CID for duplicate checking
+  flaggedAt         DateTime?   // When flagged for review
+  flaggedReason     String?     // Why it was flagged
+  
+  // Evidence and documentation
+  attachments       String[]    // File URLs
+  evidenceNotes     String?    
+  evidenceCid       String?     // IPFS CID for evidence
+  
+  // Review process
+  reviewStartedAt   DateTime?
+  reviewCompletedAt DateTime?
+  reviewNotes       String?    
+  reviewerId        String?     // Validator who reviewed
+  
+  // Approval details
+  approvedAmount    Int?        // in cents
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  rejectionReason   String?    
+  
+  // EAS Attestation
+  attestationUid    String?     // EAS attestation UID
+  attestationTxHash String?     // Transaction hash for attestation
+  
+  // Payout details
+  payoutMethod      PayoutMethod?
+  payoutAddress     String?     // Wallet address or bank details
+  
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  votes             Vote[]
+  payouts           Payout[]
+  auditLogs         AuditLog[]
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  
+  @@map("claims")
+}
+
+model Vote {
+  id                String      @id @default(cuid())
+  claimId           String
+  userId            String
+  
+  vote              VoteType
+  reasoning         String?    
+  confidence        Int         // 1-10 scale
+  
+  // Validator information
+  validatorStake    Int?        // Stake amount for validation
+  validatorReward   Int?        // Reward for correct vote
+  
+  claim             Claim       @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  
+  @@unique([claimId, userId]) // One vote per user per claim
+  @@map("votes")
+}
+
+model Payout {
+  id                String        @id @default(cuid())
+  claimId           String
+  userId            String
+  
+  amount            Int           // in cents
+  currency          String        @default("usd")
+  method            PayoutMethod
+  
+  // Blockchain transaction details
+  txHash            String?
+  blockNumber       Int?
+  networkId         String?       @default("137") // Polygon
+  
+  // Traditional payment details
+  stripeTransferId  String?
+  bankTransferId    String?
+  
+  status            PayoutStatus  @default(PENDING)
+  
+  processedAt       DateTime?
+  confirmedAt       DateTime?
+  failedAt          DateTime?
+  failureReason     String?
+  
+  metadata          Json?
+  
+  claim             Claim         @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  @@map("payouts")
+}
+
+// Treasury & Financial Tracking
+model TreasurySnapshot {
+  id                String   @id @default(cuid())
+  
+  totalBalance      BigInt   // Total treasury balance in wei
+  availableBalance  BigInt   // Available for payouts
+  reservedBalance   BigInt   // Reserved funds
+  
+  usdcBalance       BigInt   // USDC balance in wei
+  maticBalance      BigInt   // MATIC balance in wei
+  ethBalance        BigInt   // ETH balance in wei
+  
+  totalMembers      Int
+  activeMembers     Int
+  totalClaims       Int
+  approvedClaims    Int
+  totalPayouts      BigInt
+  
+  blockNumber       Int
+  networkId         String   @default("137")
+  
+  createdAt         DateTime @default(now())
+  
+  @@map("treasury_snapshots")
+}
+
+// Governance & Proposals
+model Proposal {
+  id                String          @id @default(cuid())
+  title             String
+  description       String          @db.Text
+  category          ProposalCategory
+  
+  proposerId        String          // User ID
+  proposer          User            @relation("ProposedBy", fields: [proposerId], references: [id], onDelete: Cascade)
+  
+  // Voting details
+  startTime         DateTime
+  endTime           DateTime
+  quorumRequired    Int             // Percentage required (0-100)
+  votingThreshold   Int             @default(50) // Percentage needed to pass (0-100)
+  
+  forVotes          BigInt          @default(0) // Vote weight for
+  againstVotes      BigInt          @default(0) // Vote weight against  
+  abstainVotes      BigInt          @default(0) // Vote weight abstain
+  totalVotes        Int             @default(0) // Number of voters
+  
+  status            ProposalStatus  @default(DRAFT)
+  
+  // Execution details
+  executable        Boolean         @default(false)
+  executedAt        DateTime?
+  executionTxHash   String?
+  executorId        String?
+  executor          User?           @relation("ExecutedBy", fields: [executorId], references: [id], onDelete: SetNull)
+  
+  // Metadata
+  discussionUrl     String?         // Forum/Discord link
+  tags              String[]        // Searchable tags
+  
+  // Voting tracking
+  votes             ProposalVote[]
+  delegates         DelegateVote[]
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  @@map("proposals")
+}
+
+model ProposalVote {
+  id                String          @id @default(cuid())
+  proposalId        String
+  voterId           String
+  
+  vote              VoteChoice
+  votingPower       BigInt          // Vote weight at time of vote
+  reason            String?         @db.Text
+  
+  // Delegation tracking
+  isDelegated       Boolean         @default(false)
+  delegateId        String?         // If voted by delegate
+  
+  proposal          Proposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  voter             User            @relation("VoteCast", fields: [voterId], references: [id], onDelete: Cascade)
+  delegate          User?           @relation("DelegateVote", fields: [delegateId], references: [id], onDelete: SetNull)
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  @@unique([proposalId, voterId])
+  @@map("proposal_votes")
+}
+
+model DelegateVote {
+  id                String          @id @default(cuid())
+  proposalId        String
+  delegateId        String
+  delegatorId       String
+  
+  votingPower       BigInt          // Delegated voting power
+  
+  proposal          Proposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  delegate          User            @relation("ActingDelegate", fields: [delegateId], references: [id], onDelete: Cascade)
+  delegator         User            @relation("Delegating", fields: [delegatorId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime        @default(now())
+  
+  @@unique([proposalId, delegatorId])
+  @@map("delegate_votes")
+}
+
+model Delegation {
+  id                String          @id @default(cuid())
+  delegatorId       String
+  delegateId        String
+  
+  votingPower       BigInt          // Current delegated power
+  scope             DelegationScope @default(ALL) // What they can vote on
+  expiresAt         DateTime?       // Optional expiration
+  
+  active            Boolean         @default(true)
+  
+  delegator         User            @relation("DelegatedTo", fields: [delegatorId], references: [id], onDelete: Cascade)
+  delegate          User            @relation("ReceivedDelegation", fields: [delegateId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  @@unique([delegatorId, delegateId])
+  @@map("delegations")
+}
+
+model GovernanceToken {
+  id                String          @id @default(cuid())
+  userId            String
+  
+  balance           BigInt          @default(0) // Token balance in wei
+  lockedBalance     BigInt          @default(0) // Locked for voting/staking
+  
+  // Earning history
+  earnedFromClaims  BigInt          @default(0) // Tokens earned from successful claims
+  earnedFromVoting  BigInt          @default(0) // Tokens earned from voting
+  earnedFromStaking BigInt          @default(0) // Tokens earned from staking
+  
+  // Multipliers
+  membershipMultiplier Float        @default(1.0) // Based on NFT tier
+  tenureMultiplier  Float           @default(1.0) // Based on membership length
+  participationMultiplier Float     @default(1.0) // Based on participation
+  
+  lastUpdated       DateTime        @default(now())
+  
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  @@unique([userId])
+  @@map("governance_tokens")
+}
+
+// System & Audit Management
+model AuditLog {
+  id                String          @id @default(cuid())
+  userId            String?
+  claimId           String?
+  
+  action            AuditAction
+  entityType        String          // "user", "claim", "payment", etc.
+  entityId          String
+  
+  oldValues         Json?
+  newValues         Json?
+  metadata          Json?
+  
+  ipAddress         String?
+  userAgent         String?
+  
+  user              User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  claim             Claim?          @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  
+  createdAt         DateTime        @default(now())
+  
+  @@map("audit_logs")
+}
+
+model SystemConfig {
+  id                String   @id @default(cuid())
+  key               String   @unique
+  value             String
+  description       String?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@map("system_config")
+}
+
+// Feature Flags & System Settings
+model FeatureFlag {
+  id                String   @id @default(cuid())
+  key               String   @unique
+  enabled           Boolean  @default(false)
+  description       String?
+  
+  // Environment-specific overrides
+  environmentOverrides Json?  // { "development": true, "staging": false, etc. }
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@map("feature_flags")
+}
+
+model TreasuryConfig {
+  id                String   @id @default(cuid())
+  
+  // Safe wallet configuration
+  safeAddress       String
+  chainId           Int      @default(137) // Polygon
+  
+  // Limits and thresholds
+  dailyCapUsd       Int      // Daily payout cap in USD cents
+  maxClaimUsd       Int      // Maximum claim amount in USD cents
+  minQuorumPercent  Int      @default(30) // Minimum quorum for governance
+  
+  // Risk management
+  autoApprovalLimit Int      @default(10000) // Auto-approve under $100
+  highRiskThreshold Float    @default(0.7)   // Risk score threshold
+  
+  // Operational settings
+  gracePeriodDays   Int      @default(7)     // Membership grace period
+  votingPeriodHours Int      @default(168)   // 7 days default
+  
+  isActive          Boolean  @default(true)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@map("treasury_config")
+}
+
+// Rate Limiting
+model RateLimit {
+  id                String   @id @default(cuid())
+  identifier        String   // IP address or user ID
+  action            String   // login, claim_submit, vote_cast, etc.
+  
+  attempts          Int      @default(1)
+  windowStart       DateTime
+  windowEnd         DateTime
+  
+  blocked           Boolean  @default(false)
+  blockedUntil      DateTime?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@unique([identifier, action, windowStart])
+  @@map("rate_limits")
+}
+
+// Membership NFT Management
+model MembershipNFT {
+  id                String      @id @default(cuid())
+  tokenId           String      @unique  // On-chain token ID
+  contractAddress   String                // NFT contract address
+  chainId           Int         @default(137) // Polygon
+  
+  // Owner information
+  ownerId           String
+  owner             User        @relation("NFTOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  // NFT metadata
+  tier              MembershipTier
+  name              String              // NFT name
+  description       String    @db.Text  // NFT description
+  imageUrl          String              // IPFS or hosted image URL
+  metadataUri       String              // Token URI
+  
+  // Membership benefits
+  votingPowerMultiplier Float   @default(1.0) // Voting power multiplier
+  claimLimitUsd     Int         @default(50000) // Claim limit in USD cents
+  governanceAccess  Boolean     @default(true)  // Can participate in governance
+  premiumFeatures   Boolean     @default(false) // Access to premium features
+  
+  // Validity and status
+  issuedAt          DateTime    @default(now())
+  expiresAt         DateTime?   // Optional expiration
+  isActive          Boolean     @default(true)
+  revokedAt         DateTime?
+  revokedReason     String?
+  revokedBy         String?     // Admin who revoked
+  revoker           User?       @relation("NFTRevoker", fields: [revokedBy], references: [id], onDelete: SetNull)
+  
+  // On-chain tracking
+  mintTxHash        String?     // Minting transaction hash
+  mintBlockNumber   Int?        // Block number when minted
+  transferHistory   NFTTransfer[]
+  
+  // Validation and verification
+  verificationLevel VerificationLevel @default(BASIC)
+  verifiedAt        DateTime?
+  verifierId        String?     // Admin who verified
+  verifier          User?       @relation("NFTVerifier", fields: [verifierId], references: [id], onDelete: SetNull)
+  
+  // Special attributes
+  isFounder         Boolean     @default(false) // Founder tier NFT
+  serialNumber      Int?        // Serial number for limited editions
+  attributes        Json?       // Additional NFT attributes
+  
+  // Reverse relations
+  mintRequests      NFTMintRequest[] @relation("ApprovedMintRequest")
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  
+  @@map("membership_nfts")
+}
+
+model NFTTransfer {
+  id                String      @id @default(cuid())
+  nftId             String
+  nft               MembershipNFT @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  
+  fromAddress       String?     // null for minting
+  toAddress         String      // Recipient address
+  txHash            String      // Transaction hash
+  blockNumber       Int         // Block number
+  
+  transferType      TransferType
+  
+  createdAt         DateTime    @default(now())
+  
+  @@map("nft_transfers")
+}
+
+model NFTMintRequest {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation("NFTMintRequests", fields: [userId], references: [id], onDelete: Cascade)
+  
+  requestedTier     MembershipTier
+  justification     String      @db.Text // Why they deserve this tier
+  
+  // Verification documents
+  documentsUploaded Boolean     @default(false)
+  documentsCid      String?     // IPFS CID for documents
+  
+  // Review process
+  status            MintRequestStatus @default(PENDING)
+  reviewedAt        DateTime?
+  reviewerId        String?
+  reviewer          User?       @relation("NFTMintReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewNotes       String?
+  
+  // If approved
+  approvedTier      MembershipTier?
+  nftId             String?     @unique
+  approvedNFT       MembershipNFT? @relation("ApprovedMintRequest", fields: [nftId], references: [id], onDelete: SetNull)
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  
+  @@map("nft_mint_requests")
+}
+
+// Enums
+enum UserRole {
+  MEMBER
+  VALIDATOR
+  ADMIN
+  SUPERADMIN
+}
+
+enum MembershipStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  EXPIRED
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  UNPAID
+}
+
+enum SubscriptionPlan {
+  BASIC
+  PREMIUM
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum ClaimCategory {
+  MEDICAL
+  VEHICLE
+  DEVICE
+  INCOME_LOSS
+  EMERGENCY
+  OTHER
+}
+
+enum ClaimStatus {
+  DRAFT
+  SUBMITTED
+  FLAGGED
+  UNDER_REVIEW
+  VOTING
+  APPROVED
+  DENIED
+  PAID
+  CANCELLED
+}
+
+enum ClaimPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum VoteChoice {
+  FOR
+  AGAINST
+  ABSTAIN
+}
+
+enum DelegationScope {
+  ALL           // Can vote on all proposals
+  TREASURY      // Only treasury proposals
+  GOVERNANCE    // Only governance proposals
+  MEMBERSHIP    // Only membership proposals
+  CLAIMS        // Only claims-related proposals
+}
+
+enum VoteType {
+  APPROVE
+  REJECT
+  ABSTAIN
+}
+
+enum PayoutMethod {
+  CRYPTO
+  BANK_TRANSFER
+  STRIPE
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ProposalCategory {
+  TREASURY
+  GOVERNANCE
+  MEMBERSHIP
+  CLAIMS
+  TECHNICAL
+}
+
+enum ProposalStatus {
+  DRAFT
+  ACTIVE
+  SUCCEEDED
+  DEFEATED
+  CANCELLED
+  EXECUTED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  VOTE
+  APPROVE
+  REJECT
+  PAYOUT
+  REFUND
+}
+
+enum MembershipTier {
+  BASIC           // Standard membership
+  PREMIUM         // Enhanced benefits
+  FOUNDER         // Founding members
+  EARLY_ADOPTER   // Early supporters
+  VALIDATOR       // Active validators
+  CONTRIBUTOR     // Active contributors
+}
+
+enum VerificationLevel {
+  BASIC           // Basic KYC
+  ENHANCED        // Enhanced verification
+  PREMIUM         // Premium verification with documents
+  INSTITUTIONAL   // Institutional verification
+}
+
+enum TransferType {
+  MINT            // Initial minting
+  TRANSFER        // Regular transfer
+  UPGRADE         // Tier upgrade
+  REVOKE          // Revocation/burn
+}
+
+enum MintRequestStatus {
+  PENDING         // Awaiting review
+  UNDER_REVIEW    // Being reviewed
+  APPROVED        // Approved for minting
+  REJECTED        // Rejected
+  MINTED          // NFT has been minted
+  CANCELLED       // Cancelled by user
+}
+
+// Security & Monitoring Models
+model Alert {
+  id          String    @id @default(cuid())
+  category    String
+  severity    String
+  title       String
+  description String
+  metadata    String?   // JSON string
+  timestamp   DateTime  @default(now())
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?
+
+  @@map("alerts")
+}

@@ -1,0 +1,158 @@
+import { ApolloServer } from '@apollo/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { makeExecutableSchema } from '@graphql-tools/schema'
+import { PrismaClient } from '@safetynet/db'
+import { typeDefs } from '@/lib/graphql/schema'
+import { resolvers, Context } from '@/lib/graphql/resolvers'
+import { getSecuritySystems } from '@/lib/security'
+
+const prisma = new PrismaClient()
+
+const schema = makeExecutableSchema({
+  typeDefs,
+  resolvers,
+})
+
+const server = new ApolloServer<Context>({
+  schema,
+  plugins: [
+    // Custom plugin for security logging
+    {
+      async requestDidStart() {
+        return {
+          async didResolveOperation(requestContext) {
+            const { auditLogger } = getSecuritySystems()
+            const operationName = requestContext.request.operationName
+            const query = requestContext.request.query
+            
+            if (requestContext.contextValue.userId) {
+              await auditLogger.logUserAction(
+                requestContext.contextValue.userId,
+                'GRAPHQL_REQUEST' as any,
+                {
+                  operationName,
+                  query: query?.substr(0, 500), // Truncate long queries
+                }
+              )
+            }
+          },
+          async didEncounterErrors(requestContext) {
+            const { auditLogger } = getSecuritySystems()
+            const errors = requestContext.errors
+            
+            for (const error of errors) {
+              await auditLogger.logSecurityEvent(
+                'GRAPHQL_ERROR' as any,
+                'ERROR' as any,
+                {
+                  message: error.message,
+                  path: error.path,
+                  operationName: requestContext.request.operationName
+                }
+              )
+            }
+          }
+        }
+      }
+    }
+  ],
+})
+
+async function getContext(req: NextRequest): Promise<Context> {
+  // Extract authentication information
+  const authHeader = req.headers.get('authorization')
+  const sessionCookie = req.cookies.get('session')?.value
+  
+  let userId: string | undefined
+  let userRole: string | undefined
+  
+  // Simple token verification (replace with your auth logic)
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7)
+    try {
+      // Verify token and get user info
+      const session = await prisma.session.findUnique({
+        where: { token },
+        include: { user: true }
+      })
+      
+      if (session && session.expiresAt > new Date()) {
+        userId = session.user.id
+        userRole = session.user.role
+      }
+    } catch (error) {
+      console.error('Token verification failed:', error)
+    }
+  } else if (sessionCookie) {
+    try {
+      // Verify session cookie
+      const session = await prisma.session.findUnique({
+        where: { token: sessionCookie },
+        include: { user: true }
+      })
+      
+      if (session && session.expiresAt > new Date()) {
+        userId = session.user.id
+        userRole = session.user.role
+      }
+    } catch (error) {
+      console.error('Session verification failed:', error)
+    }
+  }
+  
+  return {
+    prisma,
+    userId,
+    userRole,
+    ip: req.headers.get('x-forwarded-for') || 
+        req.headers.get('x-real-ip') || 
+        'unknown'
+  }
+}
+
+export async function GET(request: NextRequest) {
+  // Apollo Server Playground in development
+  if (process.env.NODE_ENV === 'development') {
+    return new NextResponse(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>GraphQL Playground</title>
+        </head>
+        <body>
+          <h1>GraphQL API</h1>
+          <p>POST to /api/graphql to execute queries</p>
+          <p>Development mode - use GraphQL Playground or Apollo Studio</p>
+        </body>
+      </html>
+    `, {
+      headers: { 'Content-Type': 'text/html' }
+    })
+  }
+
+  return new NextResponse('GraphQL endpoint - use POST', { status: 405 })
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.text()
+    const context = await getContext(request)
+    
+    const response = await server.executeOperation(
+      {
+        query: JSON.parse(body).query,
+        variables: JSON.parse(body).variables,
+        operationName: JSON.parse(body).operationName,
+      },
+      { contextValue: context }
+    )
+    
+    return NextResponse.json(response)
+  } catch (error) {
+    console.error('GraphQL execution error:', error)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
