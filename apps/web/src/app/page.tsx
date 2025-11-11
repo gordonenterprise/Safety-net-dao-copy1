@@ -13,7 +13,7 @@ export default function HomePage() {
               Decentralized Mutual Aid
             </span>
             <h1 className="text-5xl md:text-7xl font-extrabold text-blue-900 leading-tight mb-6">
-              When life hits pause, <span className="text-teal-600">SafetyNet</span> pays to keep you moving.
+              🚀 LIVE DEPLOYMENT - When life hits pause, <span className="text-teal-600">SafetyNet</span> pays to keep you moving.
             </h1>
             <p className="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
               Join our community-governed mutual aid network. $8/month gets you access to emergency claims, governance voting, and member benefits.
