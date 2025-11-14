@@ -1,0 +1,6 @@
+.turbo/daemon/* filter=lfs diff=lfs merge=lfs -text
+apps/web/.next/cache/webpack/client-development/* filter=lfs diff=lfs merge=lfs -text
+apps/web/.next/cache/webpack/client-production/* filter=lfs diff=lfs merge=lfs -text
+apps/web/.next/cache/webpack/server-development/* filter=lfs diff=lfs merge=lfs -text
+apps/web/.next/cache/webpack/server-production/* filter=lfs diff=lfs merge=lfs -text
+node_modules/@next/swc-win32-x64-msvc/* filter=lfs diff=lfs merge=lfs -text
